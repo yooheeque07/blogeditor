@@ -91,13 +91,13 @@ Type C: ...
         const userMessage = `주제: ${topic}, 대상: ${target}, 모드: ${mode}, 리라이트대상: ${extractedText.substring(0, 5000)}`;
 
         controller.enqueue(encoder.encode("[PROGRESS] 블로그 글 작성 시작...\n"));
-        const result = await ai.models.streamGenerateContent({
+        const stream = await ai.models.generateContentStream({
           model: "gemini-2.5-flash",
           contents: [userMessage],
           config: { systemInstruction: streamingPrompt, temperature: 0.7, maxOutputTokens: 8192 }
         });
 
-        for await (const chunk of result.stream) {
+        for await (const chunk of stream) {
           if (chunk.text) controller.enqueue(encoder.encode(chunk.text));
         }
 
