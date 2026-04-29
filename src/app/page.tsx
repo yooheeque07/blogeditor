@@ -44,10 +44,19 @@ export default function Home() {
         body: JSON.stringify({ creationType, originalUrl, topic, target, stats, mode }),
       });
       
-      const data = await res.json();
+      const text = await res.text();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch (e) {
+        if (!res.ok) {
+           throw new Error(res.status === 504 ? "생성 시간이 초과되었습니다. (Vercel 타임아웃 60초 초과)" : "서버에서 올바르지 않은 응답이 반환되었습니다. (500 Error)");
+        }
+        throw new Error("JSON 파싱 오류: 서버 응답이 올바르지 않습니다.");
+      }
       
       if (!res.ok) {
-        throw new Error(data.error || "생성 중 오류가 발생했습니다.");
+        throw new Error(data?.error || "생성 중 오류가 발생했습니다.");
       }
       
       setResult(data);

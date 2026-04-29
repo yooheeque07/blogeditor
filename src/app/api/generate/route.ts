@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { GoogleGenAI, Type } from "@google/genai";
 
+export const maxDuration = 60; // Vercel 최대 타임아웃 60초로 연장
+
 export async function POST(req: Request) {
   try {
     const body = await req.json();
