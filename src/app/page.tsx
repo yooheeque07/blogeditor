@@ -64,14 +64,21 @@ export default function Home() {
         const { done, value } = await reader.read();
         if (done) break;
         
-        fullText += decoder.decode(value, { stream: true });
+        const chunk = decoder.decode(value, { stream: true });
+        fullText += chunk;
+
+        // 에러 태그 체크
+        if (fullText.includes("[ERROR]")) {
+          const errorMsg = fullText.split("[ERROR]")[1].trim();
+          throw new Error(errorMsg || "생성 도중 오류가 발생했습니다.");
+        }
 
         // 실시간 태그 파싱
         const titlesPart = fullText.split("[TITLES]")[1]?.split("[BODY]")[0]?.split("[SUMMARY]")[0] || "";
         const bodyPart = fullText.split("[BODY]")[1]?.split("[SUMMARY]")[0] || "";
         const summaryPart = fullText.split("[SUMMARY]")[1] || "";
 
-        const newResult: OutputData = {
+        setResult({
           titles: {
             typeA: titlesPart.match(/Type A:\s*(.*)/)?.[1]?.trim() || (titlesPart ? "작성 중..." : ""),
             typeB: titlesPart.match(/Type B:\s*(.*)/)?.[1]?.trim() || (titlesPart ? "작성 중..." : ""),
@@ -79,9 +86,7 @@ export default function Home() {
           },
           body: bodyPart.trim(),
           summary: summaryPart.trim()
-        };
-
-        setResult(newResult);
+        });
       }
     } catch (error: any) {
       setErrorText(error.message);
