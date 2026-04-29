@@ -90,31 +90,16 @@ Type C: ...
 
         const userMessage = `주제: ${topic}, 대상: ${target}, 모드: ${mode}, 리라이트대상: ${extractedText.substring(0, 5000)}`;
 
-        // 속도가 빠른 Flash 모델을 우선 배치하여 504 에러를 방지합니다.
-        const modelPriority = ["gemini-2.5-flash", "gemini-3-flash-preview", "gemini-3.1-pro-preview", "gemini-2.5-pro"];
-        
-        let success = false;
-        for (const modelName of modelPriority) {
-          try {
-            const result = await ai.models.streamGenerateContent({
-              model: modelName,
-              contents: [userMessage],
-              config: { systemInstruction: streamingPrompt, temperature: 0.7, maxOutputTokens: 8192 }
-            });
+        controller.enqueue(encoder.encode("[PROGRESS] 블로그 글 작성 시작...\n"));
+        const result = await ai.models.streamGenerateContent({
+          model: "gemini-2.5-flash",
+          contents: [userMessage],
+          config: { systemInstruction: streamingPrompt, temperature: 0.7, maxOutputTokens: 8192 }
+        });
 
-            controller.enqueue(encoder.encode("[PROGRESS] 블로그 글 작성 시작...\n"));
-            for await (const chunk of result.stream) {
-              if (chunk.text) controller.enqueue(encoder.encode(chunk.text));
-            }
-            success = true;
-            break;
-          } catch (e: any) {
-            console.warn(`Model ${modelName} failed:`, e.message);
-            continue;
-          }
+        for await (const chunk of result.stream) {
+          if (chunk.text) controller.enqueue(encoder.encode(chunk.text));
         }
-
-        if (!success) controller.enqueue(encoder.encode("[ERROR] 모든 AI 모델이 응답에 실패했습니다."));
 
       } catch (error: any) {
         console.error("Stream Start Error:", error);
