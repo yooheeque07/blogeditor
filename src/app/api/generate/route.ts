@@ -62,7 +62,12 @@ export async function POST(req: Request) {
     }
 
     // Initialize the GoogleGenAI client inside the request handler
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      console.error("GEMINI_API_KEY is missing in environment variables.");
+      return NextResponse.json({ error: "API 키가 설정되지 않았습니다. .env.local 파일을 확인해주세요." }, { status: 500 });
+    }
+    const ai = new GoogleGenAI({ apiKey });
 
     const modeFlow = mode === '소개글'
       ? "도입-교육필요성(문제제기)-커리큘럼 상세안내-기대효과-결론-CTA의 흐름"
@@ -137,110 +142,86 @@ ${creationType === "rewrite" ? `\n\n[분석 및 리라이트 대상 원문 텍�
 위 정보를 분석하고 바탕으로 최적화된 블로그 콘텐츠를 구조화하여 생성해주세요. 도입부는 주제와 대상에 맞는 '문제 해결형 도입' 가이드라인을 따르고, 결론은 '오늘교육원의 맞춤형 교육 솔루션'으로 마무리하세요.${rewriteInstruction}
 `;
 
-    // [Multi-Model Fallback Logic] 2026 안정적인 모델 우선순위
+    // [Multi-Model Fallback Logic]
+    // 스트리밍 시에는 속도가 중요하므로 Flash 모델을 우선순위에 배치할 수도 있으나, 
+    // 사용자의 품질 요구사항을 고려하여 기존 우선순위를 유지하되 스트리밍을 적용합니다.
     const modelPriority = ["gemini-3.1-pro-preview", "gemini-3-pro-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-3-flash-preview"];
-    let response;
+    
+    // 스트리밍을 위해 시스템 프롬프트에 출력 형식을 명시합니다. (JSON 스키마 대신 태그 방식 사용)
+    const streamingPrompt = `${systemPrompt}
+
+**[출력 형식 가이드라인: 매우 중요]**
+반드시 아래의 태그 구조를 사용하여 순서대로 출력하세요. 다른 설명은 일절 하지 마세요.
+
+[TITLES]
+Type A: (데이터/성과형 제목)
+Type B: (서사/현장형 제목)
+Type C: (전문성 강조형 제목)
+
+[BODY]
+(이곳에 1,500자 이상의 본문 내용을 상세히 작성하세요. 문단 사이에는 빈 줄을 두 번 넣으세요.)
+
+[SUMMARY]
+(이곳에 핵심 3줄 요약을 작성하세요.)
+`;
+
+    let result;
     let success = false;
     let lastError: any = null;
 
     for (const modelName of modelPriority) {
-      let retryCount = 0;
-      const maxRetries = 2; // Increased retries per model
-
-      while (retryCount <= maxRetries) {
-        try {
-          console.log(`Attempting generation with: ${modelName} (Retry: ${retryCount})`);
-          response = await ai.models.generateContent({
-            model: modelName,
-            contents: [userMessage],
-            config: {
-              systemInstruction: systemPrompt,
-              temperature: 0.5,
-              maxOutputTokens: 8192,
-              responseMimeType: "application/json",
-              responseSchema: {
-                type: Type.OBJECT,
-                properties: {
-                  titles: {
-                    type: Type.OBJECT,
-                    properties: {
-                      typeA: { type: Type.STRING, description: "[대상+주제] 형태의 대괄호 키워드를 포함한 데이터/지표 중심 제목" },
-                      typeB: { type: Type.STRING, description: "[대상+주제] 형태의 대괄호 키워드를 포함한 현장/서사 중심 제목" },
-                      typeC: { type: Type.STRING, description: "[대상+주제] 형태의 대괄호 키워드를 포함한 오늘교육원 전문성 강조 제목" }
-                    },
-                    required: ["typeA", "typeB", "typeC"]
-                  },
-                  bodyParagraphs: { 
-                    type: Type.ARRAY, 
-                    description: "마크다운 기호가 일절 없는 평문 본문 단락의 배열. 본문을 여러 개의 긴 문단(Paragraph)으로 세분화하세요. 1500자 이상을 채우기 위해 최소 6~7개 이상의 단락을 배열에 넣어야 합니다. 배열의 마지막 원소에는 반드시 CTA와 해시태그를 포함하세요.",
-                    items: { type: Type.STRING }
-                  },
-                  summary: { type: Type.STRING, description: "내부 보고/SNS 홍보용 핵심 3줄 요약 (평문)" }
-                },
-                required: ["titles", "bodyParagraphs", "summary"]
-              }
-            }
-          });
-          success = true;
-          break; // Success with current model
-        } catch (err: any) {
-          lastError = err;
-          // [Fix] @google/genai SDK often strigifies the error body into err.message, so strict err.status === 503 check fails.
-          const isBusy = err.status === 503 || (err.message && (err.message.includes('"code":503') || err.message.includes('503')));
-          
-          if (isBusy && retryCount < maxRetries) {
-            retryCount++;
-            console.warn(`${modelName} is busy. Retrying... (${retryCount}/${maxRetries})`);
-            await new Promise(res => setTimeout(res, 2000));
-            continue;
+      try {
+        console.log(`Attempting streaming generation with: ${modelName}`);
+        result = await ai.models.streamGenerateContent({
+          model: modelName,
+          contents: [userMessage],
+          config: {
+            systemInstruction: streamingPrompt,
+            temperature: 0.7,
+            maxOutputTokens: 8192,
           }
-          console.error(`${modelName} failed after ${retryCount} retries:`, isBusy ? "API Busy (503)" : err.message);
-          break; // Fail this model, move to next model in the outer loop
-        }
+        });
+        success = true;
+        break;
+      } catch (err: any) {
+        lastError = err;
+        console.error(`Error with ${modelName}:`, err.message || err);
+        continue;
       }
-      if (success) break;
     }
 
-    if (!success || !response) {
-      throw lastError || new Error("모든 AI 모델이 현재 사용 가능하지 않습니다.");
+    if (!success || !result) {
+      return NextResponse.json({ error: lastError?.message || "모든 모델이 응답에 실패했습니다." }, { status: 500 });
     }
 
-    const parsedContent = response.text;
-    if (!parsedContent) throw new Error("AI 응답 본문을 읽어올 수 없습니다.");
-    
-    const parsedData = JSON.parse(parsedContent);
-    // 배열로 받은 문단들을 줄바꿈 2번(\n\n)으로 결합하여 하나의 완성된 글로 조립
-    if (parsedData.bodyParagraphs && Array.isArray(parsedData.bodyParagraphs)) {
-        parsedData.body = parsedData.bodyParagraphs.join("\n\n");
-        delete parsedData.bodyParagraphs;
-    }
-    
-    console.log(`Generated body length: ${parsedData.body?.length || 0} characters`);
+    // ReadableStream 생성하여 브라우저에 즉시 전송 시작
+    const stream = new ReadableStream({
+      async start(controller) {
+        const encoder = new TextEncoder();
+        try {
+          for await (const chunk of result.stream) {
+            const text = chunk.text;
+            if (text) {
+              controller.enqueue(encoder.encode(text));
+            }
+          }
+        } catch (err) {
+          console.error("Streaming error:", err);
+        } finally {
+          controller.close();
+        }
+      },
+    });
 
-    // [안전망 텍스트 필터 기능] 혹시라도 AI가 금지어를 생성했다면 프론트엔드 전송 전 강제로 제거 또는 치환
-    if (parsedData.body) {
-      let bodyText = parsedData.body;
-      
-      // 특별히 문맥이 끊기지 않도록 "단순한 지식 전달을 넘어"는 대체어로 치환
-      bodyText = bodyText.split("단순한 지식 전달을 넘어").join("실질적인 교육적 효과를 창출하며");
-      
-      // 그 외의 금지어는 발견 시 빈칸으로 삭제
-      const otherForbidden = forbiddenPhrases.filter(p => p !== "단순한 지식 전달을 넘어");
-      otherForbidden.forEach(phrase => {
-        bodyText = bodyText.split(phrase).join("");
-      });
-
-      parsedData.body = bodyText;
-    }
-
-    return NextResponse.json(parsedData);
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-cache",
+      },
+    });
 
   } catch (error: any) {
-    console.error("Generation API Error:", error);
-    const status = error.status || 500;
-    return NextResponse.json({ 
-      error: error.message || "내부 서버 오류가 발생했습니다.", 
-      status: status 
-    }, { status: status });
+    console.error("Unhandled Generation API Error:", error);
+    return NextResponse.json({ error: error.message || "내부 서버 오류가 발생했습니다." }, { status: 500 });
   }
 }
