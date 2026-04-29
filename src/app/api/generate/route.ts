@@ -97,8 +97,15 @@ Type C: ...
           config: { systemInstruction: streamingPrompt, temperature: 0.7, maxOutputTokens: 8192 }
         });
 
-        for await (const chunk of stream) {
-          if (chunk.text) controller.enqueue(encoder.encode(chunk.text));
+        try {
+          for await (const chunk of stream) {
+            if (chunk.text) controller.enqueue(encoder.encode(chunk.text));
+          }
+        } catch (streamErr: any) {
+          // 스트림 마지막 청크 파싱 에러는 무시 (이미 콘텐츠가 전송됨)
+          if (!streamErr.message?.includes("Incomplete JSON")) {
+            controller.enqueue(encoder.encode(`\n[STREAM_WARN] ${streamErr.message}`));
+          }
         }
 
       } catch (error: any) {
