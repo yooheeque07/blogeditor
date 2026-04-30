@@ -169,22 +169,7 @@ ${creationType === "rewrite" ? `\n\n[분석 및 리라이트 대상 원문 텍�
       }
     };
 
-    const models = ["gemini-2.5-flash", "gemini-2.0-flash"];
-    let response: Awaited<ReturnType<typeof ai.models.generateContent>> | null = null;
-    let lastError: any = null;
-
-    for (const model of models) {
-      try {
-        response = await ai.models.generateContent({ model, ...generateConfig });
-        break;
-      } catch (err: any) {
-        lastError = err;
-        const is503 = err?.status === 503 || err?.message?.includes("503") || err?.message?.includes("UNAVAILABLE");
-        if (!is503) throw err;
-      }
-    }
-
-    if (!response) throw lastError;
+    const response = await ai.models.generateContent({ model: "gemini-2.5-flash", ...generateConfig });
     
     const parsedContent = response.text;
     if (!parsedContent) throw new Error("AI 응답 본문을 읽어올 수 없습니다.");
