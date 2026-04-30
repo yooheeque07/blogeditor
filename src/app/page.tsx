@@ -51,55 +51,12 @@ export default function Home() {
         throw new Error(errorData?.error || (res.status === 504 ? "생성 시간이 초과되었습니다. (Vercel 타임아웃)" : "생성 중 오류가 발생했습니다."));
       }
 
-      const reader = res.body?.getReader();
-      if (!reader) throw new Error("응답 스트림을 읽을 수 없습니다.");
-
-      const decoder = new TextDecoder();
-      let fullText = "";
-      let hasContent = false;
-      
-      // 결과값 초기화 (실시간 누적을 위함)
-      setResult({ titles: { typeA: "...", typeB: "...", typeC: "..." }, body: "", summary: "" });
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        
-        const chunk = decoder.decode(value, { stream: true });
-        fullText += chunk;
-
-        // 실시간 태그 파싱
-        const titlesPart = fullText.split("[TITLES]")[1]?.split("[BODY]")[0]?.split("[SUMMARY]")[0] || "";
-        const bodyPart = fullText.split("[BODY]")[1]?.split("[SUMMARY]")[0] || "";
-        const summaryPart = fullText.split("[SUMMARY]")[1]?.split("[ERROR]")[0] || "";
-
-        const parsedTitles = {
-          typeA: titlesPart.match(/Type A:\s*(.*)/)?.[1]?.trim() || (titlesPart ? "작성 중..." : ""),
-          typeB: titlesPart.match(/Type B:\s*(.*)/)?.[1]?.trim() || (titlesPart ? "작성 중..." : ""),
-          typeC: titlesPart.match(/Type C:\s*(.*)/)?.[1]?.trim() || (titlesPart ? "작성 중..." : ""),
-        };
-        const parsedBody = bodyPart.trim();
-        const parsedSummary = summaryPart.trim();
-
-        hasContent = !!(parsedTitles.typeA || parsedBody || parsedSummary);
-
-        setResult({
-          titles: parsedTitles,
-          body: parsedBody,
-          summary: parsedSummary
-        });
-
-        // 에러 태그 체크 - 이미 콘텐츠가 있으면 에러 무시
-        if (fullText.includes("[ERROR]") && !hasContent) {
-          const errorMsg = fullText.split("[ERROR]")[1].trim();
-          throw new Error(errorMsg || "생성 도중 오류가 발생했습니다.");
-        }
-      }
-
-      // 스트림 종료 후 에러가 있었지만 콘텐츠도 있었다면 경고만 표시
-      if (fullText.includes("[ERROR]") && hasContent) {
-        setErrorText("⚠️ 일부 생성 과정에서 오류가 발생했지만, 콘텐츠는 정상적으로 생성되었습니다.");
-      }
+      const data = await res.json();
+      setResult({
+        titles: data.titles,
+        body: data.body,
+        summary: data.summary,
+      });
     } catch (error: any) {
       setErrorText(error.message);
     } finally {
