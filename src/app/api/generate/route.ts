@@ -138,8 +138,7 @@ ${creationType === "rewrite" ? `\n\n[분석 및 리라이트 대상 원문 텍�
 위 정보를 분석하고 바탕으로 최적화된 블로그 콘텐츠를 구조화하여 생성해주세요. 도입부는 주제와 대상에 맞는 '문제 해결형 도입' 가이드라인을 따르고, 결론은 '오늘교육원의 맞춤형 교육 솔루션'으로 마무리하세요.${rewriteInstruction}
 `;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+    const generateConfig = {
       contents: [userMessage],
       config: {
         systemInstruction: systemPrompt,
@@ -158,8 +157,8 @@ ${creationType === "rewrite" ? `\n\n[분석 및 리라이트 대상 원문 텍�
               },
               required: ["typeA", "typeB", "typeC"]
             },
-            bodyParagraphs: { 
-              type: Type.ARRAY, 
+            bodyParagraphs: {
+              type: Type.ARRAY,
               description: "마크다운 기호가 일절 없는 평문 본문 단락의 배열. 본문을 여러 개의 긴 문단으로 세분화하세요. 1500자 이상을 채우기 위해 최소 6~7개 이상의 단락을 배열에 넣어야 합니다. 배열의 마지막 원소에는 반드시 CTA와 해시태그를 포함하세요.",
               items: { type: Type.STRING }
             },
@@ -168,7 +167,24 @@ ${creationType === "rewrite" ? `\n\n[분석 및 리라이트 대상 원문 텍�
           required: ["titles", "bodyParagraphs", "summary"]
         }
       }
-    });
+    };
+
+    const models = ["gemini-2.5-flash", "gemini-2.0-flash"];
+    let response: Awaited<ReturnType<typeof ai.models.generateContent>> | null = null;
+    let lastError: any = null;
+
+    for (const model of models) {
+      try {
+        response = await ai.models.generateContent({ model, ...generateConfig });
+        break;
+      } catch (err: any) {
+        lastError = err;
+        const is503 = err?.status === 503 || err?.message?.includes("503") || err?.message?.includes("UNAVAILABLE");
+        if (!is503) throw err;
+      }
+    }
+
+    if (!response) throw lastError;
     
     const parsedContent = response.text;
     if (!parsedContent) throw new Error("AI 응답 본문을 읽어올 수 없습니다.");
