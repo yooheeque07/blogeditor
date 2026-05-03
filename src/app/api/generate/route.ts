@@ -151,6 +151,20 @@ ${forbiddenPhrases.map(phrase => `- "${phrase}"`).join('\n')}
 
 **[본문 구성 및 분량 확보 전략]**
 본문은 반드시 1,500자 이상의 초장문으로 상세하게 작성해야 합니다. 요청된 모드에 맞춰 반드시 **${modeFlow}**을 따르되, 각 단계마다 최소 300자 이상의 풍부한 설명을 덧붙이세요. **절대로 본문을 중간에 생략하거나 '보고용 3줄 요약'으로 서둘러 넘어가지 마세요.** 본문이 충분히 완성된 것을 확인한 후에만 다음 필드를 작성하세요.
+
+**[응답 형식: 다음 구분자를 정확히 사용하여 응답하세요]**
+다음의 정확한 포맷으로 응답을 구성하세요. 각 섹션이 완료될 때마다 다음 구분자로 이동하세요.
+
+[TITLES]
+Type A: [데이터/지표 중심 제목 - [대상+주제] 키워드 포함]
+Type B: [현장/서사 중심 제목 - [대상+주제] 키워드 포함]
+Type C: [전문성 브랜드 제목 - [대상+주제] 키워드 포함]
+
+[BODY]
+[본문 텍스트 - 마크다운 기호 절대 금지, 평문만 사용, 단락 구분은 빈 줄 2번 사용]
+
+[SUMMARY]
+[3줄 요약 - 1. 첫 번째 줄 \n 2. 두 번째 줄 \n 3. 세 번째 줄]
 `;
 
     const rewriteInstruction = creationType === "rewrite" 
@@ -174,48 +188,34 @@ ${creationType === "rewrite" ? `\n\n[분석 및 리라이트 대상 원문 텍�
       config: {
         systemInstruction: systemPrompt,
         temperature: 0.5,
-        maxOutputTokens: 8192,
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            titles: {
-              type: Type.OBJECT,
-              properties: {
-                typeA: { type: Type.STRING, description: "[대상+주제] 형태의 대괄호 키워드를 포함한 데이터/지표 중심 제목" },
-                typeB: { type: Type.STRING, description: "[대상+주제] 형태의 대괄호 키워드를 포함한 현장/서사 중심 제목" },
-                typeC: { type: Type.STRING, description: "[대상+주제] 형태의 대괄호 키워드를 포함한 오늘교육원 전문성 강조 제목" }
-              },
-              required: ["typeA", "typeB", "typeC"]
-            },
-            bodyParagraphs: {
-              type: Type.ARRAY,
-              description: "마크다운 기호가 일절 없는 평문 본문 단락의 배열. 본문을 여러 개의 긴 문단으로 세분화하세요. 1500자 이상을 채우기 위해 최소 6~7개 이상의 단락을 배열에 넣어야 합니다. 배열의 마지막 원소에는 반드시 CTA와 해시태그를 포함하세요.",
-              items: { type: Type.STRING }
-            },
-            summary: { type: Type.STRING, description: "내부 보고/SNS 홍보용 핵심 3줄 요약 (평문)" }
-          },
-          required: ["titles", "bodyParagraphs", "summary"]
-        }
+        maxOutputTokens: 8192
       }
     };
 
-    const response = await ai.models.generateContent({ model: "gemini-2.5-flash", ...generateConfig });
-    
-    const parsedContent = response.text;
-    if (!parsedContent) throw new Error("AI 응답 본문을 읽어올 수 없습니다.");
-    
-    const parsedData = JSON.parse(parsedContent);
+    const stream = await ai.models.generateContentStream({ model: "gemini-2.5-flash", ...generateConfig });
 
-    // 배열로 받은 문단들을 줄바꿈 2번으로 결합
-    if (parsedData.bodyParagraphs && Array.isArray(parsedData.bodyParagraphs)) {
-      parsedData.body = parsedData.bodyParagraphs.join("\n\n");
-      delete parsedData.bodyParagraphs;
+    let fullText = "";
+    for await (const chunk of stream) {
+      fullText += chunk.text ?? "";
     }
 
+    if (!fullText) throw new Error("AI 응답 본문을 읽어올 수 없습니다.");
+
+    // 구분자로 섹션 파싱
+    const titlesPart = fullText.split("[TITLES]")[1]?.split("[BODY]")[0] ?? "";
+    const bodyPart = fullText.split("[BODY]")[1]?.split("[SUMMARY]")[0] ?? "";
+    const summaryPart = fullText.split("[SUMMARY]")[1] ?? "";
+
+    // 각 섹션에서 내용 추출 (정규식)
+    const titleA = titlesPart.match(/Type A:\s*([\s\S]*?)(?=Type B:|$)/)?.[1]?.trim() ?? "";
+    const titleB = titlesPart.match(/Type B:\s*([\s\S]*?)(?=Type C:|$)/)?.[1]?.trim() ?? "";
+    const titleC = titlesPart.match(/Type C:\s*([\s\S]*?)(?=$)/)?.[1]?.trim() ?? "";
+
+    let bodyText = bodyPart.trim();
+    let summaryText = summaryPart.trim();
+
     // 금지어 자동 치환/제거
-    if (parsedData.body) {
-      let bodyText = parsedData.body;
+    if (bodyText) {
       bodyText = bodyText.split("단순한 지식 전달을 넘어").join("실질적인 교육적 효과를 창출하며");
       const otherForbidden = forbiddenPhrases.filter(p => p !== "단순한 지식 전달을 넘어");
       otherForbidden.forEach(phrase => {
@@ -225,10 +225,26 @@ ${creationType === "rewrite" ? `\n\n[분석 및 리라이트 대상 원문 텍�
       japaneseStyleReplacements.forEach(([pattern, replacement]) => {
         bodyText = bodyText.replace(pattern, replacement);
       });
-      parsedData.body = bodyText;
     }
 
-    return NextResponse.json(parsedData);
+    // 응답 포맷: 클라이언트가 파싱할 수 있도록 JSON 형식으로 반환
+    const responseData = JSON.stringify({
+      titles: { typeA: titleA, typeB: titleB, typeC: titleC },
+      body: bodyText,
+      summary: summaryText
+    });
+
+    // ReadableStream으로 반환
+    const readable = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(responseData));
+        controller.close();
+      }
+    });
+
+    return new Response(readable, {
+      headers: { "Content-Type": "application/json; charset=utf-8" }
+    });
 
   } catch (error: any) {
     console.error("Generation API Error:", error);
